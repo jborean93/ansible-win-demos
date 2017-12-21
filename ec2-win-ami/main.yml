@@ -156,9 +156,5 @@
 
   - name: print output message
     debug:
-      msg: |
-        Congratulations you have a new AMI created by Ansible, details
-            ID - {{ pri_ami_info.image_id }}
-            Name - test-ami
-            Password - {{ pri_ec2_win_password.win_password }}
+      msg: 'Congratulations you have a new AMI created by Ansible. Id: "{{ pri_ami_info.image_id }}", Name: "test-ami", Password: "{{ pri_ec2_win_password.win_password }}"'
 

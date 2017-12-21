@@ -9,6 +9,7 @@ that things work and as a guideline to show people how it could potentially be d
 * Ansible 2.4 or newer
 * boto installed in the Python running Ansible
 * pywinrm installed in the Python running Ansible
+* IAM user created with an AWS Access Key and Secret Key
 
 ## Components
 
