@@ -1,0 +1,164 @@
+---
+- name: provision new Windows EC2 instance
+  hosts: localhost
+  gather_facts: no
+  tasks:
+  - name: assert mandatory vars are set before running
+    assert:
+      that:
+      - man_ec2_aws_secret_key is defined
+      - man_ec2_aws_access_key is defined
+      - man_ec2_instance_type is defined
+      - man_ec2_security_group is defined
+      - man_ec2_region is defined
+      - man_ec2_ami_id is defined
+      - man_ec2_unique_tag is defined
+      - man_ec2_keypair is defined
+      - man_ec2_keyfile_path is defined
+
+  - name: create new security group
+    ec2_group:
+      name: '{{ man_ec2_security_group }}'
+      description: Security Group for temp Windows EC2 instance
+      region: '{{ man_ec2_region }}'
+      rules:
+      - proto: tcp
+        from_port: 5986
+        to_port: 5986
+        cidr_ip: 0.0.0.0/0
+      rules_egress:
+      - proto: all
+        cidr_ip: 0.0.0.0/0
+      state: present
+      aws_access_key: '{{ man_ec2_aws_access_key }}'
+      aws_secret_key: '{{ man_ec2_aws_secret_key }}'
+    register: pri_ec2_group
+
+  - name: create new Windows EC2 instance
+    ec2:
+      group_id: '{{ pri_ec2_group.group_id }}'
+      instance_type: '{{ man_ec2_instance_type }}'
+      image: '{{ man_ec2_ami_id }}'
+      wait: yes
+      region: '{{ man_ec2_region }}'
+      exact_count: 1
+      user_data: "{{ lookup('template', 'userdata.txt.tmpl') }}"
+      key_name: '{{ man_ec2_keypair }}'
+      count_tag:
+        Name: '{{ man_ec2_unique_tag }}'
+      instance_tags:
+        Name: '{{ man_ec2_unique_tag }}'
+      aws_access_key: '{{ man_ec2_aws_access_key }}'
+      aws_secret_key: '{{ man_ec2_aws_secret_key }}'
+    register: pri_ec2_instance
+
+  - name: get Administrator password for newly created EC2 instance
+    ec2_win_password:
+      instance_id: '{{ pri_ec2_instance.tagged_instances[0].id }}'
+      key_file: '{{ man_ec2_keyfile_path }}'
+      wait: yes
+      region: '{{ man_ec2_region }}'
+      aws_access_key: '{{ man_ec2_aws_access_key }}'
+      aws_secret_key: '{{ man_ec2_aws_secret_key }}'
+    register: pri_ec2_win_password
+
+  - name: add newly created Windows EC2 instance to windows group
+    add_host:
+      name: '{{ pri_ec2_instance.tagged_instances[0].public_ip }}'
+      group: windows
+      ansible_password: '{{ pri_ec2_win_password.win_password }}'
+
+- name: configure new Windows EC2 instance
+  hosts: windows
+  gather_facts: no
+  tasks:
+  - name: wait for the connection to come online
+    wait_for_connection:
+
+  - name: install vim to prove AMI works
+    win_chocolatey:
+      name: vim
+      state: present
+
+  - name: ensure sysprep panther dir exists
+    win_file:
+      path: C:\Windows\Panther\Unattend
+      state: directory
+
+  - name: template out sysprep answer file
+    win_template:
+      src: unattend.xml.tmpl
+      dest: C:\Windows\Panther\Unattend\unattend.xml
+
+  - name: create scheduled task that will run sysprep and shutdown the host
+    win_scheduled_task_new:
+      name: ami-shutdown
+      username: SYSTEM
+      disallow_start_if_on_batteries: no
+      stop_if_going_on_batteries: no
+      actions:
+      - path: powershell.exe
+        arguments: -ExecutionPolicy ByPass Start-Sleep -Seconds 5
+      - path: powershell.exe
+        arguments: -ExecutionPolicy ByPass Remove-Item -Path WSMan:\localhost\Listener\* -Recurse -Force
+      - path: powershell.exe
+        arguments: -ExecutionPolicy Bypass Remove-Item -Path Cert:\LocalMachine\My\* -Force
+      - path: C:\Windows\System32\sysprep\sysprep.exe
+        arguments: /generalize /oobe /quiet /shutdown /unattend:C:\Windows\Panther\Unattend\unattend.xml      
+
+  - name: kick of scheduled task to shutdown the host for sysprep
+    win_command: schtasks.exe /Run /TN "ami-shutdown"
+
+- name: create AMI based on new EC2 instance and cleanup
+  hosts: localhost
+  gather_facts: no
+  tasks:
+  - name: wait for the host to be shut down
+    ec2_instance_facts:
+      instance_ids: '{{ pri_ec2_instance.tagged_instances[0].id }}'
+      region: '{{ man_ec2_region }}'
+      aws_access_key: '{{ man_ec2_aws_access_key }}'
+      aws_secret_key: '{{ man_ec2_aws_secret_key }}'
+    register: pri_ec2_state
+    until: pri_ec2_state.instances[0].state.name == 'stopped'
+    retries: 10
+    delay: 20
+
+  - name: create AMI from EC2 instance
+    ec2_ami:
+      instance_id: '{{ pri_ec2_instance.tagged_instances[0].id }}'
+      name: test-ami
+      wait: yes
+      region: '{{ man_ec2_region }}'
+      aws_access_key: '{{ man_ec2_aws_access_key }}'
+      aws_secret_key: '{{ man_ec2_aws_secret_key }}'
+    register: pri_ami_info
+
+  - name: remove EC2 instance after AMI is taken
+    ec2:
+      instance_ids: '{{ pri_ec2_instance.tagged_instances[0].id }}'
+      state: absent
+      region: '{{ man_ec2_region }}'
+      aws_access_key: '{{ man_ec2_aws_access_key }}'
+      aws_secret_key: '{{ man_ec2_aws_secret_key }}'
+
+  - name: remove security group after AMI is taken
+    ec2_group:
+      name: '{{ man_ec2_security_group }}'
+      state: absent
+      region: '{{ man_ec2_region }}'
+      aws_access_key: '{{ man_ec2_aws_access_key }}'
+      aws_secret_key: '{{ man_ec2_aws_secret_key }}'
+    register: pri_ec2_sg_delete
+    until: pri_ec2_sg_delete is successful
+    retries: 10
+    delay: 20
+
+  - name: print output message
+    debug:
+      msg: |
+        Congratulations you have a new AMI created by Ansible, details
+            ID - {{ pri_ami_info.image_id }}
+            Name - test-ami
+            Password - {{ pri_ec2_win_password.win_password }}
+
