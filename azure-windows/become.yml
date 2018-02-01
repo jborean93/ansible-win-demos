@@ -1,0 +1,20 @@
+---
+- name: setup user for become with Admin rights
+  hosts: all
+  become_method: runas
+
+  tasks:
+  - name: setup user to become
+    win_domain_user:
+      name: become
+      password: Password01
+      firstname: Become
+      surname: Ansible
+      groups:
+      - Domain Admins
+      state: present
+  
+  - name: ensure become works
+    win_command: whoami
+    become: yes
+    register: become_output

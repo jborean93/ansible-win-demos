@@ -1,0 +1,16 @@
+---
+- name: manage files/directories
+  hosts: all
+
+  tasks:
+  - name: create directory with Ansible module
+    win_file:
+      path: C:\ansible\ansible-module
+      state: directory
+  
+  - name: create directory with DSC module
+    win_dsc:
+      resource_name: File
+      type: Directory
+      destinationpath: C:\ansible\dsc-module
+      ensure: present

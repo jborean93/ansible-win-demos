@@ -1,0 +1,12 @@
+---
+- name: cleanup the Azure resource group after test
+  hosts: localhost
+  connection: local
+
+  tasks:
+  - name: remove Azure resource group
+    azure_rm_resourcegroup:
+      name: '{{azure_resource_group}}'
+      location: australiaeast
+      state: absent
+      force: yes
